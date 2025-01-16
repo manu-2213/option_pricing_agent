@@ -1,40 +1,325 @@
+# config.yaml
+# Configuration for the Option Hedging RL Model
+
 simulation_metadata:
-  device: 'mps'
-  num_episodes: 5
-  num_steps_per_episode: 5
-  num_substeps_per_step: 4
+  project_name: 'OptionHedgingRL'
+  device: 'cpu'
+  num_episodes: 10
+  num_steps_per_episode: 1000
+  seed: 42
+  
+  # Arbitrary, will need justified change
+  
+  num_market_makers: 3
+  num_institutional_investors: 3
 
-  num_agents: 40
-  num_exchanges: 80
-  num_assets: 2
+  option_data: 'data/datfile01.xlsx'
 
-  asset_data: 'data/'
 
 state:
-    environment:
-    agents:
-        option_buyer:
-            properties:
-                starting_capital:
-                remaining_capital:
-        market_maker:
-    objects:
-        call_option:
-            price:
-            strike_price:
-            exercise_date:
-            time_to_maturity:
-            underlying_asset:
-        put_option:
-            price:
-            strike_price:
-            exercise_date:
-            time_to_maturity:
-            underlying_asset:
+  environment:
+    market_state:
+      name: 'Market State'
+      learnable: false
+      shape: null
+      dtype: 'dict'
+      value: null
+      initialization_function: null
+    bounds:
+      name: 'Price Bounds'
+      learnable: false
+      shape: 2
+      dtype: 'float'
+      value:
+        - 0.0
+        - 1000.0
+      initialization_function: null
+    volatility:
+      name: 'Market Volatility'
+      learnable: false
+      shape: 1
+      dtype: 'float'
+      value: 0.2 # Might need some change later. The volatililty can be obtained from Synthetic Data now
+      initialization_function: null
+
+  agents:
+    market_makers:
+      number: ${simulation_metadata.num_market_makers}
+      properties:
+        spread:
+          name: 'Bid-Ask Spread'
+          learnable: false
+          shape:
+            - ${state.agents.market_makers.number}
+            - 1
+          dtype: 'float'
+          value: ${simulation_metadata.initial_price * 0.0005}  # Example spread
+          initialization_function: null
+        inventory:
+          name: 'Inventory Levels'
+          learnable: false
+          shape:
+            - ${state.agents.market_makers.number}
+            - 1
+          dtype: 'float'
+          value: 0.0
+          initialization_function: null
+    institutional_investors:
+      number: ${simulation_metadata.num_institutional_investors}
+      properties:
+        strategy:
+          name: 'Trading Strategy'
+          learnable: false
+          shape:
+            - ${state.agents.institutional_investors.number}
+          dtype: 'str'
+          value: 'macro_driven'
+          initialization_function: null
+        trade_volume:
+          name: 'Trade Volume'
+          learnable: false
+          shape:
+            - ${state.agents.institutional_investors.number}
+            - 1
+          dtype: 'float'
+          value: 1000.0
+          initialization_function: null
+    retail_traders:
+      number: ${simulation_metadata.num_retail_traders}
+      properties:
+        max_order_size:
+          name: 'Max Order Size'
+          learnable: false
+          shape:
+            - ${state.agents.retail_traders.number}
+            - 1
+          dtype: 'int'
+          value: 100
+          initialization_function: null
+    rl_agent:
+      number: 1
+      properties:
+        position:
+          name: 'RL Agent Position'
+          learnable: false
+          shape:
+            - 1
+            - 1
+          dtype: 'float'
+          value: 0.0
+          initialization_function: null
+        pnl:
+          name: 'Profit and Loss'
+          learnable: false
+          shape:
+            - 1
+            - 1
+          dtype: 'float'
+          value: 0.0
+          initialization_function: null
+        hedging_error:
+          name: 'Hedging Error'
+          learnable: false
+          shape:
+            - 1
+            - 1
+          dtype: 'float'
+          value: 0.0
+          initialization_function: null
+        policy_network:
+          name: 'Policy Network'
+          learnable: true
+          shape: null
+          dtype: 'model'
+          value: null
+          initialization_function:
+            generator: 'InitializePolicyNetwork'
+            arguments:
+              input_size:
+                name: 'Input Size'
+                learnable: false
+                value: 50  # Number of input features including LLM features
+                initialization_function: null
+              hidden_layers:
+                name: 'Hidden Layers'
+                learnable: false
+                value:
+                  - size: 128
+                    activation: 'relu'
+                  - size: 64
+                    activation: 'relu'
+                initialization_function: null
+              output_size:
+                name: 'Output Size'
+                learnable: false
+                value: 3  # Actions: Buy, Sell, Hold
+                initialization_function: null
+
+objects:
+  market_data:
+    name: 'Market Data Stream'
+    learnable: false
+    shape: null
+    dtype: 'data_stream'
+    value: null
+    initialization_function: null
+  llm_features:
+    name: 'LLM Features'
+    learnable: false
+    shape: null
+    dtype: 'dict'
+    value: null
+    initialization_function: null
+
+network:
+  agent_interactions:
+    market:
+      type: 'order_execution'
+      arguments: null
 
 substeps:
-    '0': 
-        name: 'buy_option'
-    '1':
-        name: 'sell_option'
-    '2':
+  '0':
+    name: 'Market Update'
+    description: 'Simulate market agents placing orders and update the market state'
+    active_agents:
+      - 'market_makers'
+      - 'institutional_investors'
+      - 'retail_traders'
+    observation:
+      market_makers:
+        market_state:
+          generator: 'GetMarketState'
+          arguments: null
+      institutional_investors:
+        market_state:
+          generator: 'GetMarketState'
+          arguments: null
+      retail_traders:
+        market_state:
+          generator: 'GetMarketState'
+          arguments: null
+    policy:
+      market_makers:
+        place_orders:
+          generator: 'MarketMakerStrategy'
+          arguments:
+            spread: 'agents/market_makers/spread'
+            inventory: 'agents/market_makers/inventory'
+            market_state: 'observation/market_makers/market_state'
+          input_variables: null
+          output_variables:
+            - orders
+      institutional_investors:
+        place_orders:
+          generator: 'InstitutionalInvestorStrategy'
+          arguments:
+            strategy: 'agents/institutional_investors/strategy'
+            trade_volume: 'agents/institutional_investors/trade_volume'
+            market_state: 'observation/institutional_investors/market_state'
+          input_variables: null
+          output_variables:
+            - orders
+      retail_traders:
+        place_orders:
+          generator: 'RetailTraderStrategy'
+          arguments:
+            max_order_size: 'agents/retail_traders/max_order_size'
+            market_state: 'observation/retail_traders/market_state'
+          input_variables: null
+          output_variables:
+            - orders
+    transition:
+      execute_orders:
+        generator: 'ExecuteMarketOrders'
+        arguments:
+          orders:
+            - 'policy/market_makers/place_orders/orders'
+            - 'policy/institutional_investors/place_orders/orders'
+            - 'policy/retail_traders/place_orders/orders'
+          market_state: 'environment/market_state'
+        input_variables: null
+        output_variables:
+          - 'environment/market_state'
+
+  '1':
+    name: 'RL Agent Observation and Decision'
+    description: 'RL agent observes the market and decides on hedging actions'
+    active_agents:
+      - 'rl_agent'
+    observation:
+      rl_agent:
+        market_state:
+          generator: 'GetMarketState'
+          arguments: null
+        llm_features:
+          generator: 'GetLLMFeatures'
+          arguments:
+            enabled: ${simulation_metadata.llm_integration_enabled}
+            update_frequency: ${simulation_metadata.llm_update_frequency}
+            model: ${simulation_metadata.llm_model}
+            data_sources:
+              - './data/historical_market_data.csv'
+              - './data/news_headlines.json'
+              - './data/macro_indicators.csv'
+          input_variables: null
+          output_variables:
+            - 'objects/llm_features/value'
+    policy:
+      rl_agent:
+        decide_action:
+          generator: 'RLPolicyNetwork'
+          arguments:
+            market_state: 'observation/rl_agent/market_state'
+            llm_features: 'objects/llm_features/value'
+            policy_network: 'agents/rl_agent/policy_network'
+          input_variables: null
+          output_variables:
+            - action
+    transition:
+      execute_action:
+        generator: 'ExecuteHedgingAction'
+        arguments:
+          action: 'policy/rl_agent/decide_action/action'
+          position: 'agents/rl_agent/position'
+          market_state: 'environment/market_state'
+        input_variables: null
+        output_variables:
+          - 'agents/rl_agent/position'
+          - 'agents/rl_agent/pnl'
+          - 'agents/rl_agent/hedging_error'
+
+  '2':
+    name: 'RL Agent Learning'
+    description: 'Update the RL agent’s policy network based on rewards'
+    active_agents:
+      - 'rl_agent'
+    observation:
+      rl_agent:
+        hedging_error: 'agents/rl_agent/hedging_error'
+        pnl: 'agents/rl_agent/pnl'
+    policy:
+      rl_agent:
+        update_policy:
+          generator: 'QNetworkUpdate'
+          arguments:
+            hedging_error: 'observation/rl_agent/hedging_error'
+            pnl: 'observation/rl_agent/pnl'
+            reward_function:
+              hedging_accuracy_weight: -1.0
+              profitability_weight: 1.0
+              transaction_cost_weight: -0.1
+            policy_network: 'agents/rl_agent/policy_network'
+            replay_buffer_size: 10000
+            batch_size: 64
+            gamma: 0.99
+          input_variables: null
+          output_variables:
+            - 'agents/rl_agent/policy_network'
+
+# Additional substeps can be added as necessary.
+
+# Comments:
+# - Replace placeholder generators and arguments with actual implementations.
+# - Ensure all input and output variables are correctly linked.
+# - Paths to data sources for LLM features should be validated.
+# - The policy network initialization and updates should match your RL framework.
